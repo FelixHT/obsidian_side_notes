@@ -6,3 +6,56 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+/* .markdown-preview-view {
+    max-width: 70%;
+    margin-left: 0;
+    position: relative;
+  }
+  
+.sidenote {
+float: right;
+clear: right;
+margin-right: -50%;
+width: 40%;
+margin-top: 0;
+margin-bottom: 0;
+font-size: 0.9em;
+line-height: 1.3;
+vertical-align: baseline;
+position: relative;
+background-color: #f0f0f0;
+padding: 5px;
+border-radius: 5px;
+}
+
+.sidenote sup {
+color: #00ffff;
+margin-right: 5px;
+}
+
+.cm-sidenote {
+position: absolute;
+right: -40%;
+width: 35%;
+font-size: 0.9em;
+color: #ffffff;
+background: #f0f0f0;
+padding: 5px;
+border-radius: 3px;
+}
+
+.cm-editor {
+max-width: 70%;
+}
+
+.sidenote {
+    margin-bottom: 10px;
+  }
+  
+  .sidenote-ref {
+    font-weight: bold;
+  }
+  
+  .sidenote-content {
+    margin-left: 5px;
+  } */
