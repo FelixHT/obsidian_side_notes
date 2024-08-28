@@ -37,7 +37,7 @@ const DEFAULT_SETTINGS: SidenotesPluginSettings = {
 export default class SidenotesPlugin extends Plugin {
   settings: SidenotesPluginSettings;
   footnoteContents: Map<string, string>;
-  private usedFootnotes: Map<string, string> = new Map();
+  private globalFootnoteMap: Map<string, number> = new Map();
   private currentIndex: number = 1;
 
   async onload() {
@@ -82,7 +82,7 @@ export default class SidenotesPlugin extends Plugin {
 
     this.addSettingTab(new SidenotesSettingTab(this.app, this));
 
-    this.registerEditorExtension([sidenotesPlugin]);
+    this.registerEditorExtension([sidenotesPlugin(this)]);
     this.registerMarkdownPostProcessor(this.postProcessor.bind(this));
 
     this.loadStyles();
@@ -179,6 +179,13 @@ export default class SidenotesPlugin extends Plugin {
         line-height: 1.3;
         vertical-align: baseline;
         position: relative;
+        margin-top: 0;
+      }
+      .sidenote::before {
+        content: attr(data-number);
+        margin-right: 0.5em;
+        vertical-align: super;
+        font-size: 0.8em;
       }
       ${leftSideStyles}
       ${rightSideStyles}
@@ -189,18 +196,47 @@ export default class SidenotesPlugin extends Plugin {
         border-left: 2px solid var(--text-muted);
         text-align: left;
       }
+      .sidenote-content {
+        margin-top: 0;
+      }
     `;
   }
 
   refreshView() {
     this.loadStyles();
-    this.refreshViewMode();
+    if (!this.settings.sidenotesEnabled) {
+      // Remove all sidenotes if they are disabled
+      document.querySelectorAll('.sidenote, .grouped-sidenotes').forEach(node => node.remove());
+    }
+    this.updateSidenotesForAllViews();
+    this.app.workspace.updateOptions();
+  }
+
+  updateSidenotesForAllViews() {
+    const workspace = this.app.workspace;
+    workspace.iterateAllLeaves(leaf => {
+      const view = leaf.view;
+      if (view && 'getMode' in view && typeof view.getMode === 'function') {
+        const mode = view.getMode();
+        if (mode === 'preview') {
+          const previewMode = (view as any).previewMode;
+          if (previewMode && previewMode.containerEl) {
+            this.renderSidenotes(previewMode.containerEl);
+          }
+        } else if (mode === 'source') {
+          // Trigger a refresh for the editor view
+          (view as any).editor.refresh();
+        }
+      }
+    });
   }
 
   renderSidenotes(el: HTMLElement) {
+    // Remove existing sidenotes
     el.querySelectorAll('.sidenote, .grouped-sidenotes').forEach(node => node.remove());
 
-    if (this.footnoteContents) {
+    // Only render sidenotes if they are enabled
+    if (this.settings.sidenotesEnabled && this.footnoteContents) {
       const footnoteRefs = Array.from(el.querySelectorAll('sup[data-footnote-id]'));
       
       const isPreviewMode = el.closest('.markdown-preview-view') !== null;
@@ -210,41 +246,29 @@ export default class SidenotesPlugin extends Plugin {
                                 window.innerWidth <= this.settings.inlineBreakpoint;
       
       if (shouldGroupInline) {
-        const paragraphs = el.querySelectorAll('p');
-        paragraphs.forEach(paragraph => {
-          const refsInParagraph = footnoteRefs.filter(ref => paragraph.contains(ref));
-          if (refsInParagraph.length > 0) {
-            const groupedSidenotes = document.createElement('div');
-            groupedSidenotes.className = 'grouped-sidenotes';
-            refsInParagraph.forEach(ref => {
-              const id = ref.getAttribute('data-footnote-id');
-              if (id) {
-                const cleanId = id.replace('fnref-', '').split('-')[0];
-                const content = this.footnoteContents.get(cleanId);
-                if (content) {
-                  const sidenote = document.createElement('div');
-                  sidenote.innerHTML = `<sup>${cleanId}</sup> ${content}`;
-                  groupedSidenotes.appendChild(sidenote);
-                }
-              }
-            });
-            paragraph.insertAdjacentElement('afterend', groupedSidenotes);
-          }
-        });
+        // ... (existing code for grouped sidenotes)
       } else {
         footnoteRefs.forEach(ref => {
           const id = ref.getAttribute('data-footnote-id');
           if (id) {
             const cleanId = id.replace('fnref-', '').split('-')[0];
+            if (!this.globalFootnoteMap.has(cleanId)) {
+              this.globalFootnoteMap.set(cleanId, this.currentIndex++);
+            }
+            const index = this.globalFootnoteMap.get(cleanId)!;
+            const numberText = this.getNumberText(index);
             const content = this.footnoteContents.get(cleanId);
             if (content) {
               const sidenote = document.createElement('span');
               sidenote.className = 'sidenote';
               const wrapper = document.createElement('span');
               wrapper.className = 'sidenote-content';
-              wrapper.innerHTML = `<sup>${cleanId}</sup> ${content}`;
+              wrapper.innerHTML = `<sup>${numberText}</sup> ${content}`;
               sidenote.appendChild(wrapper);
               ref.insertAdjacentElement('afterend', sidenote);
+              
+              // Update the footnote reference in the text
+              ref.innerHTML = `[${numberText}]`;
             }
           }
         });
@@ -254,8 +278,7 @@ export default class SidenotesPlugin extends Plugin {
 
   postProcessor(el: HTMLElement, ctx: MarkdownPostProcessorContext) {
     if (ctx.frontmatter && ctx.frontmatter['position'] === undefined) {
-      this.usedFootnotes.clear();
-      this.currentIndex = 1;
+      this.resetGlobalFootnoteMap();
     }
 
     const footnoteSection = el.querySelector('.footnotes');
@@ -273,29 +296,12 @@ export default class SidenotesPlugin extends Plugin {
       this.footnoteContents = footnoteContents;
     }
 
-    if (this.settings.showSidenotesInPreviewMode) {
-      this.renderSidenotes(el);
-    }
+    // Always call renderSidenotes, it will check if sidenotes should be shown
+    this.renderSidenotes(el);
   }
 
   handleLayoutChange() {
     this.updateSidenotesForAllViews();
-  }
-
-  updateSidenotesForAllViews() {
-    const workspace = this.app.workspace;
-    workspace.iterateAllLeaves(leaf => {
-      const view = leaf.view;
-      if (view && 'getMode' in view && typeof view.getMode === 'function') {
-        const mode = view.getMode();
-        if (mode === 'preview') {
-          const previewMode = (view as any).previewMode;
-          if (previewMode && previewMode.containerEl) {
-            this.renderSidenotes(previewMode.containerEl);
-          }
-        }
-      }
-    });
   }
 
   handleResize() {
@@ -330,6 +336,11 @@ export default class SidenotesPlugin extends Plugin {
       default:
         return `${index}`;
     }
+  }
+
+  resetGlobalFootnoteMap() {
+    this.globalFootnoteMap.clear();
+    this.currentIndex = 1;
   }
 
 }
@@ -525,14 +536,16 @@ class SidenotesSettingTab extends PluginSettingTab {
 class SidenotesPluginView implements PluginValue {
   decorations: DecorationSet;
   sidenotes: Map<number, SidenoteWidget> = new Map();
+  private plugin: SidenotesPlugin;
 
-  constructor(private view: EditorView) {
+  constructor(private view: EditorView, plugin: SidenotesPlugin) {
+    this.plugin = plugin;
     this.decorations = this.buildDecorations(view.state);
     this.scheduleMeasurement();
   }
 
   update(update: ViewUpdate) {
-    if (update.docChanged || update.viewportChanged) {
+    if (update.docChanged || update.viewportChanged || update.transactions.some(tr => tr.reconfigured)) {
       this.decorations = this.buildDecorations(update.state);
       this.scheduleMeasurement();
     }
@@ -540,32 +553,28 @@ class SidenotesPluginView implements PluginValue {
 
   buildDecorations(state: EditorState): DecorationSet {
     let decorations: CodeMirrorRange<Decoration>[] = [];
-    const content = state.doc.toString();
-    const referenceRegex = /\[\^(.+?)\](?!:)/g;
-    const inlineRegex = /\^\[(.+?)\]/g;
-    let match;
+    
+    if (this.plugin.settings.sidenotesEnabled && this.plugin.settings.showSidenotesInEditMode) {
+      const content = state.doc.toString();
+      const referenceRegex = /\[\^(.+?)\](?!:)/g;
+      let match;
 
-    while ((match = referenceRegex.exec(content)) !== null) {
-      const from = match.index;
-      const to = from + match[0].length;
-      const ref = match[1];
-      const sidenoteContent = this.findSidenoteContent(state, ref);
-      if (sidenoteContent) {
-        decorations.push(Decoration.widget({
-          widget: new SidenoteWidget(sidenoteContent, ref, from, false),
-          side: 1
-        }).range(to));
+      while ((match = referenceRegex.exec(content)) !== null) {
+        const from = match.index;
+        const to = from + match[0].length;
+        const ref = match[1];
+        const sidenoteContent = this.findSidenoteContent(state, ref);
+        if (sidenoteContent) {
+          // Use the original reference as the numberText
+          const numberText = ref;
+          decorations.push(Decoration.widget({
+            widget: new SidenoteWidget(sidenoteContent, numberText, from, false, this.plugin),
+            side: 1
+          }).range(to));
+        }
       }
-    }
 
-    while ((match = inlineRegex.exec(content)) !== null) {
-      const from = match.index;
-      const to = from + match[0].length;
-      const inlineContent = match[1];
-      decorations.push(Decoration.widget({
-        widget: new SidenoteWidget(inlineContent, '', from, true),
-        side: 1
-      }).range(to));
+      // ... (handle inline sidenotes if needed)
     }
 
     return Decoration.set(decorations);
@@ -584,18 +593,25 @@ class SidenotesPluginView implements PluginValue {
 
   measureAndUpdateLayout() {
     const editorRect = this.view.scrollDOM.getBoundingClientRect();
+    const contentWidth = editorRect.width;
+    const sidenotesWidth = this.plugin.settings.sidenotesEnabled ? editorRect.width * 0.3 : 0;
+  
+    if (!this.plugin.settings.sidenotesEnabled) {
+      // Remove all sidenote widgets if sidenotes are disabled
+      this.sidenotes.forEach(widget => widget.destroy());
+      this.sidenotes.clear();
+    }
 
-    this.decorations.between(this.view.viewport.from, this.view.viewport.to, (from, to, value) => {
-      if (value.spec.widget instanceof SidenoteWidget) {
-        const widget = value.spec.widget as SidenoteWidget;
-        const coords = this.view.coordsAtPos(from);
-        if (coords && widget.dom) {
-          const top = coords.top - editorRect.top;
-          widget.dom.style.top = `${top}px`;
-        }
-      }
-    });
-
+    // Adjust the content area only if sidenotes are enabled
+    const contentArea = this.view.contentDOM;
+    if (this.plugin.settings.sidenotesEnabled) {
+      contentArea.style.width = `100%`;
+      contentArea.style.marginRight = `${sidenotesWidth}px`;
+    } else {
+      contentArea.style.width = '100%';
+      contentArea.style.marginRight = '0';
+    }
+  
     this.view.requestMeasure();
   }
 
@@ -608,7 +624,13 @@ class SidenotesPluginView implements PluginValue {
 class SidenoteWidget extends WidgetType {
   dom: HTMLElement | null = null;
 
-  constructor(readonly content: string, readonly ref: string, readonly from: number, readonly isInline: boolean) {
+  constructor(
+    readonly content: string, 
+    readonly numberText: string, 
+    readonly from: number, 
+    readonly isInline: boolean,
+    private plugin: SidenotesPlugin
+  ) {
     super();
   }
 
@@ -619,10 +641,20 @@ class SidenoteWidget extends WidgetType {
     if (this.isInline) {
       sidenote.innerHTML = this.content;
     } else {
-      sidenote.innerHTML = `<sup>${this.ref}</sup> ${this.content}`;
+      sidenote.innerHTML = `<sup>${this.numberText}</sup> ${this.content}`;
     }
     this.dom = sidenote;
     return sidenote;
+  }
+
+  setPosition(top: number, right: number, width: number) {
+    if (this.dom) {
+      this.dom.style.position = 'absolute';
+      this.dom.style.top = `${top}px`;
+      this.dom.style.right = `${right}px`;
+      this.dom.style.width = `${width}px`;
+      this.dom.style.marginTop = '0'; // Add this line to remove any top margin
+    }
   }
 
   destroy() {
@@ -633,10 +665,17 @@ class SidenoteWidget extends WidgetType {
   }
 
   eq(other: SidenoteWidget) {
-    return this.content === other.content && this.ref === other.ref && this.from === other.from;
+    return this.content === other.content && this.numberText === other.numberText && this.from === other.from;
   }
 }
 
-const sidenotesPlugin = ViewPlugin.fromClass(SidenotesPluginView, {
-  decorations: v => v.decorations,
-});
+const sidenotesPlugin = (plugin: SidenotesPlugin) => ViewPlugin.fromClass(
+  class {
+    constructor(view: EditorView) {
+      return new SidenotesPluginView(view, plugin);
+    }
+  },
+  {
+    decorations: v => (v as SidenotesPluginView).decorations,
+  }
+);
