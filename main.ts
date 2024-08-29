@@ -5,7 +5,6 @@ import { EditorState, Range as CodeMirrorRange } from "@codemirror/state";
 interface SidenotesPluginSettings {
   sidenotesEnabled: boolean;
   sidenotesPosition: 'right' | 'left';
-  sidenotesWidth: number;
   sidenotesColor: string;
   autoConvertFootnotes: boolean;
   showSidenotesInPreviewMode: boolean;
@@ -21,7 +20,6 @@ interface SidenotesPluginSettings {
 const DEFAULT_SETTINGS: SidenotesPluginSettings = {
   sidenotesEnabled: true,
   sidenotesPosition: 'right',
-  sidenotesWidth: 30,
   sidenotesColor: '#666666',
   autoConvertFootnotes: false,
   showSidenotesInPreviewMode: true,
@@ -241,12 +239,43 @@ export default class SidenotesPlugin extends Plugin {
       
       const isPreviewMode = el.closest('.markdown-preview-view') !== null;
       const shouldGroupInline = isPreviewMode && 
-                                this.settings.dynamicSidenotes && 
-                                this.settings.inlineSidenotesGrouping && 
-                                window.innerWidth <= this.settings.inlineBreakpoint;
-      
+      this.settings.dynamicSidenotes && 
+      this.settings.inlineSidenotesGrouping && 
+      window.innerWidth <= this.settings.inlineBreakpoint;
+
       if (shouldGroupInline) {
-        // ... (existing code for grouped sidenotes)
+        const groupedSidenotes = document.createElement('div');
+        groupedSidenotes.className = 'grouped-sidenotes';
+        
+        footnoteRefs.forEach(ref => {
+          const id = ref.getAttribute('data-footnote-id');
+          if (id) {
+            const cleanId = id.replace('fnref-', '').split('-')[0];
+            if (!this.globalFootnoteMap.has(cleanId)) {
+              this.globalFootnoteMap.set(cleanId, this.currentIndex++);
+            }
+            const index = this.globalFootnoteMap.get(cleanId)!;
+            const numberText = this.getNumberText(index);
+            const content = this.footnoteContents.get(cleanId);
+            if (content) {
+              const sidenote = document.createElement('div');
+              sidenote.className = 'sidenote';
+              sidenote.innerHTML = `<sup>${numberText}</sup> ${content}`;
+              groupedSidenotes.appendChild(sidenote);
+              
+              // Update the footnote reference in the text
+              ref.innerHTML = `[${numberText}]`;
+            }
+          }
+        });
+      
+        // Insert the grouped sidenotes after the last paragraph or at the end of the content
+        const lastParagraph = el.querySelector('p:last-of-type');
+        if (lastParagraph) {
+          lastParagraph.insertAdjacentElement('afterend', groupedSidenotes);
+        } else {
+          el.appendChild(groupedSidenotes);
+        }
       } else {
         footnoteRefs.forEach(ref => {
           const id = ref.getAttribute('data-footnote-id');
@@ -380,19 +409,6 @@ class SidenotesSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.sidenotesPosition)
         .onChange(async (value: 'right' | 'left') => {
           this.plugin.settings.sidenotesPosition = value;
-          await this.plugin.saveSettings();
-          this.plugin.refreshView();
-        }));
-
-    new Setting(containerEl)
-      .setName("Sidenotes width")
-      .setDesc("Width of sidenotes as a percentage of the main content")
-      .addSlider(slider => slider
-        .setLimits(10, 50, 5)
-        .setValue(this.plugin.settings.sidenotesWidth)
-        .setDynamicTooltip()
-        .onChange(async (value) => {
-          this.plugin.settings.sidenotesWidth = value;
           await this.plugin.saveSettings();
           this.plugin.refreshView();
         }));
@@ -592,26 +608,19 @@ class SidenotesPluginView implements PluginValue {
   }
 
   measureAndUpdateLayout() {
-    const editorRect = this.view.scrollDOM.getBoundingClientRect();
-    const contentWidth = editorRect.width;
-    const sidenotesWidth = this.plugin.settings.sidenotesEnabled ? editorRect.width * 0.3 : 0;
-  
     if (!this.plugin.settings.sidenotesEnabled) {
       // Remove all sidenote widgets if sidenotes are disabled
       this.sidenotes.forEach(widget => widget.destroy());
       this.sidenotes.clear();
     }
 
-    // Adjust the content area only if sidenotes are enabled
+    // Always set the content area width to 100%
     const contentArea = this.view.contentDOM;
-    if (this.plugin.settings.sidenotesEnabled) {
-      contentArea.style.width = `100%`;
-      contentArea.style.marginRight = `${sidenotesWidth}px`;
-    } else {
-      contentArea.style.width = '100%';
-      contentArea.style.marginRight = '0';
-    }
+    contentArea.style.width = '100%';
   
+    // Remove any margin adjustments
+    contentArea.style.marginRight = '0';
+
     this.view.requestMeasure();
   }
 
