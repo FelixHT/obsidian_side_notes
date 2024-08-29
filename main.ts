@@ -143,6 +143,7 @@ export default class SidenotesPlugin extends Plugin {
         margin-left: -33%;
         margin-right: 0;
         text-align: right;
+        left: -3em;
       }
       .sidenote-content {
         display: inline-block;
@@ -178,24 +179,42 @@ export default class SidenotesPlugin extends Plugin {
         vertical-align: baseline;
         position: relative;
         margin-top: 0;
+        color: ${this.settings.sidenotesColor};
       }
       .sidenote::before {
         content: attr(data-number);
         margin-right: 0.5em;
-        vertical-align: super;
-        font-size: 0.8em;
+        vertical-align: ${this.settings.numberingPosition};
+        font-size: ${this.settings.numberingPosition === 'superscript' ? '0.8em' : '1em'};
+        color: ${this.settings.numberingColor};
       }
       ${leftSideStyles}
       ${rightSideStyles}
       ${dynamicStyles}
       .grouped-sidenotes {
         margin-top: 1em;
-        padding: 0.5em;
-        border-left: 2px solid var(--text-muted);
-        text-align: left;
+        padding-left: 1em;
+        border-left: 3px solid var(--text-muted);
+        color: var(--text-muted);
+      }
+      .grouped-sidenotes .sidenote {
+        margin-bottom: 0.5em;
+        font-size: 0.9em;
+      }
+      .grouped-sidenotes .sidenote:last-child {
+        margin-bottom: 0;
+      }
+      .grouped-sidenotes .sidenote-number {
+        font-weight: bold;
+        margin-right: 0.5em;
       }
       .sidenote-content {
         margin-top: 0;
+      }
+      .sidenote-number {
+        color: ${this.settings.numberingColor};
+        vertical-align: ${this.settings.numberingPosition};
+        font-size: ${this.settings.numberingPosition === 'superscript' ? '0.8em' : '1em'};
       }
     `;
   }
@@ -208,6 +227,9 @@ export default class SidenotesPlugin extends Plugin {
     }
     this.updateSidenotesForAllViews();
     this.app.workspace.updateOptions();
+    
+    // Add this line to refresh the editor view
+    this.app.workspace.iterateCodeMirrors(cm => cm.refresh());
   }
 
   updateSidenotesForAllViews() {
@@ -239,9 +261,9 @@ export default class SidenotesPlugin extends Plugin {
       
       const isPreviewMode = el.closest('.markdown-preview-view') !== null;
       const shouldGroupInline = isPreviewMode && 
-      this.settings.dynamicSidenotes && 
-      this.settings.inlineSidenotesGrouping && 
-      window.innerWidth <= this.settings.inlineBreakpoint;
+        this.settings.dynamicSidenotes && 
+        this.settings.inlineSidenotesGrouping && 
+        window.innerWidth <= this.settings.inlineBreakpoint;
 
       if (shouldGroupInline) {
         const groupedSidenotes = document.createElement('div');
@@ -260,11 +282,23 @@ export default class SidenotesPlugin extends Plugin {
             if (content) {
               const sidenote = document.createElement('div');
               sidenote.className = 'sidenote';
-              sidenote.innerHTML = `<sup>${numberText}</sup> ${content}`;
+              const numberSpan = document.createElement('span');
+              numberSpan.className = 'sidenote-number';
+              numberSpan.textContent = numberText;
+              numberSpan.style.color = this.settings.numberingColor;
+              sidenote.appendChild(numberSpan);
+              sidenote.appendChild(document.createTextNode(content));
               groupedSidenotes.appendChild(sidenote);
               
-              // Update the footnote reference in the text
-              ref.innerHTML = `[${numberText}]`;
+              // Preserve the original footnote reference functionality
+              const originalLink = ref.querySelector('a');
+              if (originalLink) {
+                const newLink = originalLink.cloneNode(true) as HTMLAnchorElement;
+                newLink.textContent = `[${numberText}]`;
+                newLink.style.color = this.settings.numberingColor;
+                ref.innerHTML = '';
+                ref.appendChild(newLink);
+              }
             }
           }
         });
@@ -290,14 +324,27 @@ export default class SidenotesPlugin extends Plugin {
             if (content) {
               const sidenote = document.createElement('span');
               sidenote.className = 'sidenote';
+              sidenote.style.color = this.settings.sidenotesColor;
               const wrapper = document.createElement('span');
               wrapper.className = 'sidenote-content';
-              wrapper.innerHTML = `<sup>${numberText}</sup> ${content}`;
+              const numberSpan = document.createElement('span');
+              numberSpan.className = 'sidenote-number';
+              numberSpan.textContent = numberText;
+              numberSpan.style.color = this.settings.numberingColor;
+              wrapper.appendChild(numberSpan);
+              wrapper.appendChild(document.createTextNode(' ' + content));
               sidenote.appendChild(wrapper);
               ref.insertAdjacentElement('afterend', sidenote);
               
-              // Update the footnote reference in the text
-              ref.innerHTML = `[${numberText}]`;
+              // Preserve the original footnote reference functionality
+              const originalLink = ref.querySelector('a');
+              if (originalLink) {
+                const newLink = originalLink.cloneNode(true) as HTMLAnchorElement;
+                newLink.textContent = `[${numberText}]`;
+                newLink.style.color = this.settings.numberingColor;
+                ref.innerHTML = '';
+                ref.appendChild(newLink);
+              }
             }
           }
         });
@@ -568,32 +615,55 @@ class SidenotesPluginView implements PluginValue {
   }
 
   buildDecorations(state: EditorState): DecorationSet {
-    let decorations: CodeMirrorRange<Decoration>[] = [];
+    let decorations: {from: number, to: number, decoration: Decoration}[] = [];
     
     if (this.plugin.settings.sidenotesEnabled && this.plugin.settings.showSidenotesInEditMode) {
       const content = state.doc.toString();
       const referenceRegex = /\[\^(.+?)\](?!:)/g;
+      const inlineRegex = /\^\[(.+?)\]/g;
       let match;
 
+      // Handle reference-style footnotes
       while ((match = referenceRegex.exec(content)) !== null) {
         const from = match.index;
         const to = from + match[0].length;
         const ref = match[1];
         const sidenoteContent = this.findSidenoteContent(state, ref);
         if (sidenoteContent) {
-          // Use the original reference as the numberText
           const numberText = ref;
-          decorations.push(Decoration.widget({
-            widget: new SidenoteWidget(sidenoteContent, numberText, from, false, this.plugin),
-            side: 1
-          }).range(to));
+          decorations.push({
+            from: to,
+            to: to,
+            decoration: Decoration.widget({
+              widget: new SidenoteWidget(sidenoteContent, numberText, from, false, this.plugin),
+              side: 1
+            })
+          });
         }
       }
 
-      // ... (handle inline sidenotes if needed)
+      // Handle inline footnotes
+      while ((match = inlineRegex.exec(content)) !== null) {
+        const from = match.index;
+        const to = from + match[0].length;
+        const inlineContent = match[1];
+        const numberText = (decorations.length + 1).toString(); // Use sequential numbering for inline footnotes
+        decorations.push({
+          from: to,
+          to: to,
+          decoration: Decoration.widget({
+            widget: new SidenoteWidget(inlineContent, numberText, from, true, this.plugin),
+            side: 1
+          })
+        });
+      }
     }
 
-    return Decoration.set(decorations);
+    // Sort decorations by 'from' position
+    decorations.sort((a, b) => a.from - b.from);
+
+    // Create the DecorationSet from the sorted decorations
+    return Decoration.set(decorations.map(d => d.decoration.range(d.from)));
   }
 
   findSidenoteContent(state: EditorState, ref: string): string | null {
@@ -647,10 +717,19 @@ class SidenoteWidget extends WidgetType {
     if (this.dom) return this.dom;
     const sidenote = document.createElement('span');
     sidenote.className = 'sidenote';
+    sidenote.style.color = this.plugin.settings.sidenotesColor;
+    
+    const numberSpan = document.createElement('span');
+    numberSpan.className = 'sidenote-number';
+    numberSpan.textContent = this.numberText;
+    numberSpan.style.color = this.plugin.settings.numberingColor;
+    
     if (this.isInline) {
-      sidenote.innerHTML = this.content;
+      sidenote.appendChild(numberSpan);
+      sidenote.appendChild(document.createTextNode(' ' + this.content));
     } else {
-      sidenote.innerHTML = `<sup>${this.numberText}</sup> ${this.content}`;
+      sidenote.appendChild(numberSpan);
+      sidenote.appendChild(document.createTextNode(' ' + this.content));
     }
     this.dom = sidenote;
     return sidenote;
