@@ -6,7 +6,7 @@ interface SidenotesPluginSettings {
   sidenotesEnabled: boolean;
   sidenotesPosition: 'right' | 'left';
   sidenotesColor: string;
-  autoConvertFootnotes: boolean;
+  removeFootnotesInPreview: boolean;
   showSidenotesInPreviewMode: boolean;
   showSidenotesInEditMode: boolean;
   numberingStyle: 'none' | 'numeric' | 'alphabetic-lower' | 'alphabetic-upper';
@@ -21,7 +21,7 @@ const DEFAULT_SETTINGS: SidenotesPluginSettings = {
   sidenotesEnabled: true,
   sidenotesPosition: 'right',
   sidenotesColor: '#666666',
-  autoConvertFootnotes: false,
+  removeFootnotesInPreview: false,
   showSidenotesInPreviewMode: true,
   showSidenotesInEditMode: true,
   numberingStyle: 'numeric',
@@ -165,7 +165,14 @@ export default class SidenotesPlugin extends Plugin {
       }
     ` : '';
 
+    const hideFootnotesStyle = this.settings.removeFootnotesInPreview ? `
+      .markdown-preview-view .footnotes {
+        display: none;
+      }
+    ` : '';
+
     styleEl.textContent = `
+      ${hideFootnotesStyle}
       .markdown-source-view.mod-cm6 .cm-content {
         position: relative;
       }
@@ -178,14 +185,14 @@ export default class SidenotesPlugin extends Plugin {
         line-height: 1.3;
         vertical-align: baseline;
         position: relative;
-        margin-top: 0;
         color: ${this.settings.sidenotesColor};
       }
       .sidenote::before {
         content: attr(data-number);
         margin-right: 0.5em;
-        vertical-align: ${this.settings.numberingPosition};
-        font-size: ${this.settings.numberingPosition === 'superscript' ? '0.8em' : '1em'};
+        ${this.settings.numberingPosition === 'superscript' 
+          ? 'vertical-align: super; font-size: 0.8em;' 
+          : 'vertical-align: baseline; font-size: 1em;'}
         color: ${this.settings.numberingColor};
       }
       ${leftSideStyles}
@@ -213,8 +220,9 @@ export default class SidenotesPlugin extends Plugin {
       }
       .sidenote-number {
         color: ${this.settings.numberingColor};
-        vertical-align: ${this.settings.numberingPosition};
-        font-size: ${this.settings.numberingPosition === 'superscript' ? '0.8em' : '1em'};
+        ${this.settings.numberingPosition === 'superscript' 
+          ? 'vertical-align: super; font-size: 0.8em;' 
+          : 'vertical-align: baseline; font-size: 1em;'}
       }
     `;
   }
@@ -255,9 +263,18 @@ export default class SidenotesPlugin extends Plugin {
     // Remove existing sidenotes
     el.querySelectorAll('.sidenote, .grouped-sidenotes').forEach(node => node.remove());
 
+    // Remove footnotes if the setting is enabled
+    if (this.settings.removeFootnotesInPreview) {
+      const footnoteSection = el.querySelector('.footnotes');
+      if (footnoteSection) {
+        footnoteSection.remove();
+      }
+    }
+
     // Only render sidenotes if they are enabled
     if (this.settings.sidenotesEnabled && this.footnoteContents) {
       const footnoteRefs = Array.from(el.querySelectorAll('sup[data-footnote-id]'));
+      const footnoteSection = el.querySelector('.footnotes');
       
       const isPreviewMode = el.closest('.markdown-preview-view') !== null;
       const shouldGroupInline = isPreviewMode && 
@@ -265,21 +282,46 @@ export default class SidenotesPlugin extends Plugin {
         this.settings.inlineSidenotesGrouping && 
         window.innerWidth <= this.settings.inlineBreakpoint;
 
-      if (shouldGroupInline) {
-        const groupedSidenotes = document.createElement('div');
-        groupedSidenotes.className = 'grouped-sidenotes';
-        
-        footnoteRefs.forEach(ref => {
-          const id = ref.getAttribute('data-footnote-id');
-          if (id) {
-            const cleanId = id.replace('fnref-', '').split('-')[0];
-            if (!this.globalFootnoteMap.has(cleanId)) {
-              this.globalFootnoteMap.set(cleanId, this.currentIndex++);
+      footnoteRefs.forEach((ref, index) => {
+        const id = ref.getAttribute('data-footnote-id');
+        if (id) {
+          const cleanId = id.replace('fnref-', '').split('-')[0];
+          if (!this.globalFootnoteMap.has(cleanId)) {
+            this.globalFootnoteMap.set(cleanId, this.currentIndex++);
+          }
+          const mappedIndex = this.globalFootnoteMap.get(cleanId)!;
+          const numberText = this.getNumberText(mappedIndex);
+          const content = this.footnoteContents.get(cleanId);
+
+          if (content) {
+            // Update footnote reference in the main text
+            const originalLink = ref.querySelector('a');
+            if (originalLink) {
+              const newLink = originalLink.cloneNode(true) as HTMLAnchorElement;
+              newLink.textContent = `[${numberText}]`;
+              newLink.style.color = this.settings.numberingColor;
+              newLink.href = `#fn-${numberText}`;
+              ref.innerHTML = '';
+              ref.appendChild(newLink);
             }
-            const index = this.globalFootnoteMap.get(cleanId)!;
-            const numberText = this.getNumberText(index);
-            const content = this.footnoteContents.get(cleanId);
-            if (content) {
+
+            // Update footnote in the footnotes section
+            if (footnoteSection) {
+              const footnote = footnoteSection.querySelector(`#fn-${cleanId}`);
+              if (footnote) {
+                footnote.id = `fn-${numberText}`;
+                const backref = footnote.querySelector('.footnote-backref');
+                if (backref) {
+                  (backref as HTMLAnchorElement).href = `#fnref-${numberText}`;
+                }
+              }
+            }
+
+            // Create sidenote
+            if (shouldGroupInline) {
+              const groupedSidenotes = el.querySelector('.grouped-sidenotes') || document.createElement('div');
+              groupedSidenotes.className = 'grouped-sidenotes';
+              
               const sidenote = document.createElement('div');
               sidenote.className = 'sidenote';
               const numberSpan = document.createElement('span');
@@ -290,38 +332,14 @@ export default class SidenotesPlugin extends Plugin {
               sidenote.appendChild(document.createTextNode(content));
               groupedSidenotes.appendChild(sidenote);
               
-              // Preserve the original footnote reference functionality
-              const originalLink = ref.querySelector('a');
-              if (originalLink) {
-                const newLink = originalLink.cloneNode(true) as HTMLAnchorElement;
-                newLink.textContent = `[${numberText}]`;
-                newLink.style.color = this.settings.numberingColor;
-                ref.innerHTML = '';
-                ref.appendChild(newLink);
+              // Insert the grouped sidenotes after the last paragraph or at the end of the content
+              const lastParagraph = el.querySelector('p:last-of-type');
+              if (lastParagraph) {
+                lastParagraph.insertAdjacentElement('afterend', groupedSidenotes);
+              } else {
+                el.appendChild(groupedSidenotes);
               }
-            }
-          }
-        });
-      
-        // Insert the grouped sidenotes after the last paragraph or at the end of the content
-        const lastParagraph = el.querySelector('p:last-of-type');
-        if (lastParagraph) {
-          lastParagraph.insertAdjacentElement('afterend', groupedSidenotes);
-        } else {
-          el.appendChild(groupedSidenotes);
-        }
-      } else {
-        footnoteRefs.forEach(ref => {
-          const id = ref.getAttribute('data-footnote-id');
-          if (id) {
-            const cleanId = id.replace('fnref-', '').split('-')[0];
-            if (!this.globalFootnoteMap.has(cleanId)) {
-              this.globalFootnoteMap.set(cleanId, this.currentIndex++);
-            }
-            const index = this.globalFootnoteMap.get(cleanId)!;
-            const numberText = this.getNumberText(index);
-            const content = this.footnoteContents.get(cleanId);
-            if (content) {
+            } else {
               const sidenote = document.createElement('span');
               sidenote.className = 'sidenote';
               sidenote.style.color = this.settings.sidenotesColor;
@@ -335,19 +353,17 @@ export default class SidenotesPlugin extends Plugin {
               wrapper.appendChild(document.createTextNode(' ' + content));
               sidenote.appendChild(wrapper);
               ref.insertAdjacentElement('afterend', sidenote);
-              
-              // Preserve the original footnote reference functionality
-              const originalLink = ref.querySelector('a');
-              if (originalLink) {
-                const newLink = originalLink.cloneNode(true) as HTMLAnchorElement;
-                newLink.textContent = `[${numberText}]`;
-                newLink.style.color = this.settings.numberingColor;
-                ref.innerHTML = '';
-                ref.appendChild(newLink);
-              }
             }
           }
-        });
+        }
+      });
+    }
+
+    // Remove footnotes if the setting is enabled
+    if (this.settings.removeFootnotesInPreview) {
+      const footnoteSection = el.querySelector('.footnotes');
+      if (footnoteSection) {
+        footnoteSection.remove();
       }
     }
   }
@@ -472,12 +488,12 @@ class SidenotesSettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
-      .setName("Auto-convert footnotes")
-      .setDesc("Automatically convert footnotes to sidenotes")
+      .setName("Remove footnotes in preview mode")
+      .setDesc("Hide the footnotes section at the bottom of the document in preview mode")
       .addToggle(toggle => toggle
-        .setValue(this.plugin.settings.autoConvertFootnotes)
+        .setValue(this.plugin.settings.removeFootnotesInPreview)
         .onChange(async (value) => {
-          this.plugin.settings.autoConvertFootnotes = value;
+          this.plugin.settings.removeFootnotesInPreview = value;
           await this.plugin.saveSettings();
           this.plugin.refreshView();
         }));
@@ -647,7 +663,9 @@ class SidenotesPluginView implements PluginValue {
         const from = match.index;
         const to = from + match[0].length;
         const inlineContent = match[1];
-        const numberText = (decorations.length + 1).toString(); // Use sequential numbering for inline footnotes
+        // const numberText = (decorations.length + 1).toString(); // Use sequential numbering for inline footnotes
+        const numberText = ""; // Use sequential numbering for inline footnotes
+
         decorations.push({
           from: to,
           to: to,
@@ -718,19 +736,24 @@ class SidenoteWidget extends WidgetType {
     const sidenote = document.createElement('span');
     sidenote.className = 'sidenote';
     sidenote.style.color = this.plugin.settings.sidenotesColor;
-    
+
     const numberSpan = document.createElement('span');
     numberSpan.className = 'sidenote-number';
     numberSpan.textContent = this.numberText;
     numberSpan.style.color = this.plugin.settings.numberingColor;
-    
-    if (this.isInline) {
-      sidenote.appendChild(numberSpan);
-      sidenote.appendChild(document.createTextNode(' ' + this.content));
+
+    // Apply inline or superscript style based on settings
+    if (this.plugin.settings.numberingPosition === 'superscript') {
+      numberSpan.style.verticalAlign = 'super';
+      numberSpan.style.fontSize = '0.8em';
     } else {
-      sidenote.appendChild(numberSpan);
-      sidenote.appendChild(document.createTextNode(' ' + this.content));
+      numberSpan.style.verticalAlign = 'baseline';
+      numberSpan.style.fontSize = '1em';
     }
+
+    sidenote.appendChild(numberSpan);
+    sidenote.appendChild(document.createTextNode(' ' + this.content));
+
     this.dom = sidenote;
     return sidenote;
   }

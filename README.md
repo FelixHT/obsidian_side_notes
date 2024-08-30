@@ -10,6 +10,10 @@ This plugin for Obsidian (https://obsidian.md) allows you to display footnotes a
 - Supports both left and right margin positioning
 - Inline mode for narrow screens with grouping options
 
+## Known issues
+
+- There are some issues related to the positioning of the sidenotes when they are supposed to be rendered on the left margin. Specifically, if the footnote is referenced in indented text the sidenote will also be indented.
+
 ## Installation
 
 1. Open Obsidian and go to Settings > Community Plugins
