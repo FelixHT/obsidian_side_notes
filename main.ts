@@ -71,7 +71,7 @@ export default class SidenotesPlugin extends Plugin {
 
     this.addCommand({
       id: 'reset-sidenotes-settings',
-      name: 'Reset Sidenotes settings to defaults',
+      name: 'Reset settings to defaults',
       callback: async () => {
         await this.resetSettings();
         new Notice('Sidenotes settings have been reset to defaults');
@@ -107,6 +107,11 @@ export default class SidenotesPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
+    document.documentElement.style.setProperty('--sidenote-color', this.settings.sidenotesColor);
+    document.documentElement.style.setProperty('--sidenote-number-color', this.settings.numberingColor);
+    document.documentElement.style.setProperty('--sidenote-inline-breakpoint', `${this.settings.inlineBreakpoint}px`);
+    this.loadStyles(); // Reload styles to apply new settings
+    this.refreshView();
   }
 
   async resetSettings() {
@@ -122,9 +127,42 @@ export default class SidenotesPlugin extends Plugin {
       styleEl.id = 'sidenotes-styles';
       document.head.appendChild(styleEl);
     }
-    
+
+    const hideFootnotesStyle = this.settings.removeFootnotesInPreview ? `
+      .markdown-preview-view .footnotes {
+        display: none;
+      }
+    ` : '';
+
+    const leftSideStyles = `
+      .sidenote-left {
+        float: left;
+        clear: left;
+        margin-left: -33%;
+        margin-right: 0;
+        text-align: right;
+        left: -3em;
+      }
+      .sidenote-left .sidenote-content {
+        text-align: right;
+      }
+    `;
+
+    const rightSideStyles = `
+      .sidenote-right {
+        float: right;
+        clear: right;
+        margin-right: -33%;
+        margin-left: 0;
+        text-align: left;
+      }
+      .sidenote-right .sidenote-content {
+        text-align: left;
+      }
+    `;
+
     const dynamicStyles = this.settings.dynamicSidenotes ? `
-      @media (max-width: ${this.settings.inlineBreakpoint}px) {
+      @media (max-width: var(--sidenote-inline-breakpoint)) {
         .markdown-preview-view .sidenote {
           float: none;
           display: block;
@@ -133,41 +171,6 @@ export default class SidenotesPlugin extends Plugin {
           font-size: 0.9em;
           text-align: left;
         }
-      }
-    ` : '';
-
-    const leftSideStyles = this.settings.sidenotesPosition === 'left' ? `
-      .sidenote {
-        float: left;
-        clear: left;
-        margin-left: -33%;
-        margin-right: 0;
-        text-align: right;
-        left: -3em;
-      }
-      .sidenote-content {
-        display: inline-block;
-        text-align: right;
-      }
-    ` : '';
-
-    const rightSideStyles = this.settings.sidenotesPosition === 'right' ? `
-      .sidenote {
-        float: right;
-        clear: right;
-        margin-right: -33%;
-        margin-left: 0;
-        text-align: left;
-      }
-      .sidenote-content {
-        display: inline-block;
-        text-align: left;
-      }
-    ` : '';
-
-    const hideFootnotesStyle = this.settings.removeFootnotesInPreview ? `
-      .markdown-preview-view .footnotes {
-        display: none;
       }
     ` : '';
 
@@ -185,15 +188,19 @@ export default class SidenotesPlugin extends Plugin {
         line-height: 1.3;
         vertical-align: baseline;
         position: relative;
-        color: ${this.settings.sidenotesColor};
+        color: var(--sidenote-color);
       }
-      .sidenote::before {
-        content: attr(data-number);
+      .sidenote-number {
+        color: var(--sidenote-number-color);
         margin-right: 0.5em;
-        ${this.settings.numberingPosition === 'superscript' 
-          ? 'vertical-align: super; font-size: 0.8em;' 
-          : 'vertical-align: baseline; font-size: 1em;'}
-        color: ${this.settings.numberingColor};
+      }
+      .sidenote-number-superscript {
+        vertical-align: super;
+        font-size: 0.8em;
+      }
+      .sidenote-number-inline {
+        vertical-align: baseline;
+        font-size: 1em;
       }
       ${leftSideStyles}
       ${rightSideStyles}
@@ -213,16 +220,13 @@ export default class SidenotesPlugin extends Plugin {
       }
       .grouped-sidenotes .sidenote-number {
         font-weight: bold;
-        margin-right: 0.5em;
       }
       .sidenote-content {
         margin-top: 0;
       }
-      .sidenote-number {
-        color: ${this.settings.numberingColor};
-        ${this.settings.numberingPosition === 'superscript' 
-          ? 'vertical-align: super; font-size: 0.8em;' 
-          : 'vertical-align: baseline; font-size: 1em;'}
+      :root {
+        --sidenote-color: ${this.settings.sidenotesColor};
+        --sidenote-number-color: ${this.settings.numberingColor};
       }
     `;
   }
@@ -267,14 +271,6 @@ export default class SidenotesPlugin extends Plugin {
     // Remove existing sidenotes
     el.querySelectorAll('.sidenote, .grouped-sidenotes').forEach(node => node.remove());
 
-    // Remove footnotes if the setting is enabled
-    if (this.settings.removeFootnotesInPreview) {
-      const footnoteSection = el.querySelector('.footnotes');
-      if (footnoteSection) {
-        footnoteSection.remove();
-      }
-    }
-
     // Only render sidenotes if they are enabled
     if (this.settings.sidenotesEnabled && this.footnoteContents) {
       const footnoteRefs = Array.from(el.querySelectorAll('sup[data-footnote-id]'));
@@ -295,15 +291,18 @@ export default class SidenotesPlugin extends Plugin {
           }
           const mappedIndex = this.globalFootnoteMap.get(cleanId)!;
           const numberText = this.getNumberText(mappedIndex);
-          const content = this.footnoteContents.get(cleanId);
+          let content = this.footnoteContents.get(cleanId);
 
           if (content) {
+            // Remove the return arrow from the content
+            content = content.replace(/↩︎/g, '').trim();
+
             // Update footnote reference in the main text
             const originalLink = ref.querySelector('a');
             if (originalLink) {
               const newLink = originalLink.cloneNode(true) as HTMLAnchorElement;
               newLink.textContent = `[${numberText}]`;
-              newLink.style.color = this.settings.numberingColor;
+              newLink.className = 'sidenote-ref';
               newLink.href = `#fn-${numberText}`;
               ref.innerHTML = '';
               ref.appendChild(newLink);
@@ -329,9 +328,8 @@ export default class SidenotesPlugin extends Plugin {
               const sidenote = document.createElement('div');
               sidenote.className = 'sidenote';
               const numberSpan = document.createElement('span');
-              numberSpan.className = 'sidenote-number';
+              numberSpan.className = `sidenote-number sidenote-number-${this.settings.numberingPosition}`;
               numberSpan.textContent = numberText;
-              numberSpan.style.color = this.settings.numberingColor;
               sidenote.appendChild(numberSpan);
               sidenote.appendChild(document.createTextNode(content));
               groupedSidenotes.appendChild(sidenote);
@@ -345,14 +343,12 @@ export default class SidenotesPlugin extends Plugin {
               }
             } else {
               const sidenote = document.createElement('span');
-              sidenote.className = 'sidenote';
-              sidenote.style.color = this.settings.sidenotesColor;
+              sidenote.className = `sidenote sidenote-${this.settings.sidenotesPosition}`;
               const wrapper = document.createElement('span');
               wrapper.className = 'sidenote-content';
               const numberSpan = document.createElement('span');
-              numberSpan.className = 'sidenote-number';
+              numberSpan.className = `sidenote-number sidenote-number-${this.settings.numberingPosition}`;
               numberSpan.textContent = numberText;
-              numberSpan.style.color = this.settings.numberingColor;
               wrapper.appendChild(numberSpan);
               wrapper.appendChild(document.createTextNode(' ' + content));
               sidenote.appendChild(wrapper);
@@ -382,11 +378,20 @@ export default class SidenotesPlugin extends Plugin {
       const footnoteContents = new Map();
       footnoteSection.querySelectorAll('li[id^="fn-"]').forEach((li) => {
         const id = li.id.replace('fn-', '').split('-')[0];
-        const content = li.innerHTML
-          .replace(/<a href="#fnref.*?<\/a>/g, '')
-          .replace(/<\/?p>/g, '')
-          .trim()
-          .replace(/^\s+|\s+$/gm, '');
+        
+        // Clone the li element to avoid modifying the original
+        const clonedLi = li.cloneNode(true) as HTMLElement;
+        
+        // Remove the backref link
+        const backref = clonedLi.querySelector('a.footnote-backref');
+        if (backref) {
+          backref.remove();
+        }
+        
+        // Get the text content, removing any remaining HTML tags
+        let content = clonedLi.textContent || '';
+        content = content.trim().replace(/^\s+|\s+$/gm, '');
+        
         footnoteContents.set(id, content);
       });
       this.footnoteContents = footnoteContents;
@@ -487,8 +492,8 @@ class SidenotesSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.sidenotesColor)
         .onChange(async (value) => {
           this.plugin.settings.sidenotesColor = value;
+          document.documentElement.style.setProperty('--sidenote-color', value);
           await this.plugin.saveSettings();
-          this.plugin.refreshView();
         }));
 
     new Setting(containerEl)
@@ -559,8 +564,8 @@ class SidenotesSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.numberingColor)
         .onChange(async (value) => {
           this.plugin.settings.numberingColor = value;
+          document.documentElement.style.setProperty('--sidenote-number-color', value);
           await this.plugin.saveSettings();
-          this.plugin.refreshView();
         }));
 
     new Setting(containerEl)
@@ -667,8 +672,7 @@ class SidenotesPluginView implements PluginValue {
         const from = match.index;
         const to = from + match[0].length;
         const inlineContent = match[1];
-        // const numberText = (decorations.length + 1).toString(); // Use sequential numbering for inline footnotes
-        const numberText = ""; // Use sequential numbering for inline footnotes
+        const numberText = ""; // Keep this empty for inline footnotes
 
         decorations.push({
           from: to,
@@ -738,25 +742,18 @@ class SidenoteWidget extends WidgetType {
   toDOM() {
     if (this.dom) return this.dom;
     const sidenote = document.createElement('span');
-    sidenote.className = 'sidenote';
-    sidenote.style.color = this.plugin.settings.sidenotesColor;
+    sidenote.className = `sidenote sidenote-${this.plugin.settings.sidenotesPosition}`;
 
-    const numberSpan = document.createElement('span');
-    numberSpan.className = 'sidenote-number';
-    numberSpan.textContent = this.numberText;
-    numberSpan.style.color = this.plugin.settings.numberingColor;
+    if (this.numberText) {
+      const numberSpan = document.createElement('span');
+      numberSpan.className = `sidenote-number sidenote-number-${this.plugin.settings.numberingPosition}`;
+      numberSpan.textContent = this.numberText;
 
-    // Apply inline or superscript style based on settings
-    if (this.plugin.settings.numberingPosition === 'superscript') {
-      numberSpan.style.verticalAlign = 'super';
-      numberSpan.style.fontSize = '0.8em';
-    } else {
-      numberSpan.style.verticalAlign = 'baseline';
-      numberSpan.style.fontSize = '1em';
+      sidenote.appendChild(numberSpan);
+      sidenote.appendChild(document.createTextNode(' '));
     }
 
-    sidenote.appendChild(numberSpan);
-    sidenote.appendChild(document.createTextNode(' ' + this.content));
+    sidenote.appendChild(document.createTextNode(this.content));
 
     this.dom = sidenote;
     return sidenote;
@@ -768,7 +765,7 @@ class SidenoteWidget extends WidgetType {
       this.dom.style.top = `${top}px`;
       this.dom.style.right = `${right}px`;
       this.dom.style.width = `${width}px`;
-      this.dom.style.marginTop = '0'; // Add this line to remove any top margin
+      this.dom.style.marginTop = '0';
     }
   }
 
