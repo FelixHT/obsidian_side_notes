@@ -237,15 +237,19 @@ export default class SidenotesPlugin extends Plugin {
     this.app.workspace.updateOptions();
     
     // Add this line to refresh the editor view
-    this.app.workspace.iterateCodeMirrors(cm => cm.refresh());
+    this.app.workspace.iterateAllLeaves(leaf => {
+      if (leaf.view instanceof MarkdownView) {
+        (leaf.view.editor as any).refresh();
+      }
+    });
   }
 
   updateSidenotesForAllViews() {
     const workspace = this.app.workspace;
     workspace.iterateAllLeaves(leaf => {
       const view = leaf.view;
-      if (view && 'getMode' in view && typeof view.getMode === 'function') {
-        const mode = view.getMode();
+      if (view instanceof MarkdownView) {
+        const mode = view.getViewType();
         if (mode === 'preview') {
           const previewMode = (view as any).previewMode;
           if (previewMode && previewMode.containerEl) {
@@ -253,7 +257,7 @@ export default class SidenotesPlugin extends Plugin {
           }
         } else if (mode === 'source') {
           // Trigger a refresh for the editor view
-          (view as any).editor.refresh();
+          (view.editor as any).refresh();
         }
       }
     });
@@ -406,7 +410,7 @@ export default class SidenotesPlugin extends Plugin {
     const leaves = this.app.workspace.getLeavesOfType("markdown");
     for (const leaf of leaves) {
       const view = leaf.view;
-      if (view && 'getMode' in view && typeof view.getMode === 'function' && view.getMode() === 'preview') {
+      if (view instanceof MarkdownView) {
         const previewMode = (view as any).previewMode;
         if (previewMode && typeof previewMode.rerender === 'function') {
           await previewMode.rerender(true);
