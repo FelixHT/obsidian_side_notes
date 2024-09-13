@@ -1,11 +1,10 @@
 {
 	"id": "sidenotes",
 	"name": "Sidenotes",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"minAppVersion": "0.15.0",
 	"description": "Renders footnotes in the margin of the page.",
 	"author": "Felix Taschbach",
 	"authorUrl": "https://felix.phd",
-	"fundingUrl": "https://felix.phd",
 	"isDesktopOnly": true
 }
